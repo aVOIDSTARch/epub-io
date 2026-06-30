@@ -10,9 +10,18 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::NamedTempFile;
 
 
-use crate::models::{ChapterRole, ChapterText};
+use crate::models::{BookMetadata, ChapterRole, ChapterText};
+
+/// A synthesized chapter audio file plus the info needed to build chapter markers.
+#[derive(Debug, Clone)]
+pub struct ChapterAudio {
+    pub chapter_number: usize,
+    pub title: String,
+    pub path: PathBuf,
+}
 
 /// Endpoint of the local text-to-voice (TTV) service.
 const TTV_ENDPOINT: &str = "http://127.0.0.1:3310/ttv";
@@ -484,7 +493,7 @@ pub async fn synthesize_chapters(
     file_stem: &str,
     voice: Option<&str>,
     include_all: bool,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<ChapterAudio>> {
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("failed to create output directory {:?}", out_dir))?;
 
@@ -515,10 +524,241 @@ pub async fn synthesize_chapters(
             .with_context(|| format!("failed to synthesize chapter {}", chapter.chapter_number))?;
 
         tracing::info!("wrote {:?}", output_path);
-        outputs.push(output_path);
+        outputs.push(ChapterAudio {
+            chapter_number: chapter.chapter_number,
+            title: chapter.title.clone(),
+            path: output_path,
+        });
     }
 
     Ok(outputs)
+}
+
+// ───────────────────────── M4B audiobook assembly ─────────────────────────
+
+/// Assemble per-chapter audio into a single chaptered, resumable M4B audiobook
+/// (AAC in an MP4 container) with chapter markers, cover art, and book metadata.
+///
+/// Uses ffmpeg: the per-chapter files are concatenated, an ffmetadata file
+/// supplies the `[CHAPTER]` markers + global tags, and the cover (if any) is
+/// embedded as an attached picture. Returns the path to the written `.m4b`.
+pub fn build_m4b(
+    meta: &BookMetadata,
+    chapters: &[ChapterAudio],
+    out_dir: &Path,
+    file_stem: &str,
+) -> Result<PathBuf> {
+    if chapters.is_empty() {
+        anyhow::bail!("no chapters to assemble into an audiobook");
+    }
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("failed to create output directory {:?}", out_dir))?;
+
+    // Measure each chapter and compute cumulative start/end times in ms.
+    let mut marks: Vec<(String, u64, u64)> = Vec::with_capacity(chapters.len());
+    let mut cursor_ms: u64 = 0;
+    for ch in chapters {
+        let dur = probe_duration_ms(&ch.path)
+            .with_context(|| format!("failed to probe duration of {:?}", ch.path))?;
+        let start = cursor_ms;
+        let end = cursor_ms + dur;
+        marks.push((ch.title.clone(), start, end));
+        cursor_ms = end;
+    }
+
+    // Write the concat list and ffmetadata files alongside the output.
+    let concat_path = out_dir.join(format!("{file_stem}.concat.txt"));
+    let paths: Vec<PathBuf> = chapters.iter().map(|c| c.path.clone()).collect();
+    std::fs::write(&concat_path, build_concat_list(&paths)?)
+        .with_context(|| format!("failed to write concat list {:?}", concat_path))?;
+
+    let meta_path = out_dir.join(format!("{file_stem}.ffmeta.txt"));
+    let ffmeta = build_ffmetadata(
+        meta.title.as_deref(),
+        meta.author.as_deref(),
+        meta.publication_date.as_deref(),
+        meta.isbn.as_deref(),
+        &marks,
+    );
+    std::fs::write(&meta_path, ffmeta)
+        .with_context(|| format!("failed to write ffmetadata {:?}", meta_path))?;
+
+    // Cover art (optional): write to a temp file with the right extension.
+    let cover_file: Option<NamedTempFile> = match &meta.cover_image {
+        Some(bytes) if !bytes.is_empty() => {
+            let ext = if meta.cover_mime.as_deref().map(|m| m.contains("png")).unwrap_or(false) {
+                ".png"
+            } else {
+                ".jpg"
+            };
+            let mut tf = NamedTempFile::with_suffix(ext).context("cover temp file")?;
+            tf.write_all(bytes).context("write cover temp")?;
+            tf.flush().ok();
+            Some(tf)
+        }
+        _ => None,
+    };
+
+    let output_path = out_dir.join(format!("{file_stem}.m4b"));
+
+    // Build the ffmpeg invocation. Inputs: 0=concat audio, 1=ffmetadata,
+    // and optionally 2=cover.
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-y", "-hide_banner", "-loglevel", "error"])
+        .args(["-f", "concat", "-safe", "0", "-i"])
+        .arg(&concat_path)
+        .args(["-f", "ffmetadata", "-i"])
+        .arg(&meta_path);
+
+    if let Some(cover) = &cover_file {
+        cmd.arg("-i").arg(cover.path());
+    }
+
+    // Map chapters + global metadata from the ffmetadata input (index 1).
+    cmd.args(["-map_metadata", "1", "-map_chapters", "1", "-map", "0:a"]);
+    if cover_file.is_some() {
+        cmd.args(["-map", "2:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic"]);
+    }
+    cmd.args(["-c:a", "aac", "-b:a", "64k"]).arg(&output_path);
+
+    let status = cmd.status().context("failed to spawn ffmpeg for m4b assembly")?;
+    if !status.success() {
+        anyhow::bail!("ffmpeg failed to assemble m4b");
+    }
+
+    // Clean up the intermediate sidecar files.
+    let _ = std::fs::remove_file(&concat_path);
+    let _ = std::fs::remove_file(&meta_path);
+
+    Ok(output_path)
+}
+
+/// Transcode each per-chapter WAV to MP3 (alongside it) and tag it with ID3
+/// metadata. Returns the MP3 paths. The source WAVs are left in place.
+pub fn transcode_chapters_to_mp3(
+    chapters: &[ChapterAudio],
+    out_dir: &Path,
+    book_title: Option<&str>,
+    author: Option<&str>,
+) -> Result<Vec<PathBuf>> {
+    let total = chapters.len() as u32;
+    let mut outputs = Vec::with_capacity(chapters.len());
+
+    for ch in chapters {
+        let mp3_path = out_dir.join(format!(
+            "{}.mp3",
+            ch.path.file_stem().and_then(|s| s.to_str()).unwrap_or("chapter")
+        ));
+
+        let status = Command::new("ffmpeg")
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&ch.path)
+            .args(["-codec:a", "libmp3lame", "-qscale:a", "2"])
+            .arg(&mp3_path)
+            .status()
+            .context("failed to spawn ffmpeg")?;
+        if !status.success() {
+            anyhow::bail!("ffmpeg failed to transcode {:?} to mp3", ch.path);
+        }
+
+        let mut tag = Tag::new();
+        tag.set_title(ch.title.as_str());
+        if let Some(t) = book_title {
+            tag.set_album(t);
+        }
+        tag.set_artist(author.unwrap_or("epub-io"));
+        tag.set_track(ch.chapter_number as u32);
+        tag.set_total_tracks(total);
+        tag.write_to_path(&mp3_path, Version::Id3v24)
+            .context("failed to write ID3 metadata")?;
+
+        outputs.push(mp3_path);
+    }
+
+    Ok(outputs)
+}
+
+/// Probe a media file's duration in milliseconds via ffprobe.
+fn probe_duration_ms(path: &Path) -> Result<u64> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .context("failed to spawn ffprobe")?;
+    if !output.status.success() {
+        anyhow::bail!("ffprobe failed for {:?}", path);
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let secs: f64 = text.trim().parse().with_context(|| format!("unparsable duration: {text:?}"))?;
+    Ok((secs * 1000.0).round() as u64)
+}
+
+/// Build an ffmpeg concat-demuxer list file from absolute paths.
+fn build_concat_list(paths: &[PathBuf]) -> Result<String> {
+    let mut out = String::new();
+    for p in paths {
+        let abs = std::fs::canonicalize(p)
+            .with_context(|| format!("cannot canonicalize {:?}", p))?;
+        let s = abs.to_string_lossy().replace('\'', "'\\''");
+        out.push_str(&format!("file '{s}'\n"));
+    }
+    Ok(out)
+}
+
+/// Build an ffmetadata document with global tags and `[CHAPTER]` markers.
+/// `marks` is a list of (title, start_ms, end_ms) in reading order.
+fn build_ffmetadata(
+    title: Option<&str>,
+    author: Option<&str>,
+    date: Option<&str>,
+    isbn: Option<&str>,
+    marks: &[(String, u64, u64)],
+) -> String {
+    let mut out = String::from(";FFMETADATA1\n");
+    if let Some(t) = title {
+        out.push_str(&format!("title={}\n", ffmeta_escape(t)));
+        out.push_str(&format!("album={}\n", ffmeta_escape(t)));
+    }
+    if let Some(a) = author {
+        out.push_str(&format!("artist={}\n", ffmeta_escape(a)));
+        out.push_str(&format!("album_artist={}\n", ffmeta_escape(a)));
+    }
+    if let Some(d) = date {
+        out.push_str(&format!("date={}\n", ffmeta_escape(d)));
+    }
+    if let Some(i) = isbn {
+        out.push_str(&format!("comment={}\n", ffmeta_escape(i)));
+    }
+    out.push_str("genre=Audiobook\n");
+    out.push_str("encoder=epub-io\n");
+
+    for (chapter_title, start, end) in marks {
+        out.push_str("\n[CHAPTER]\nTIMEBASE=1/1000\n");
+        out.push_str(&format!("START={start}\n"));
+        out.push_str(&format!("END={end}\n"));
+        out.push_str(&format!("title={}\n", ffmeta_escape(chapter_title)));
+    }
+    out
+}
+
+/// Escape a value for the ffmetadata format (`=`, `;`, `#`, `\`, and newlines).
+fn ffmeta_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '=' | ';' | '#' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[derive(Deserialize)]
@@ -543,6 +783,30 @@ mod tests {
     use super::*;
     use crate::models::EpubVersion;
     use std::path::Path;
+
+    #[test]
+    fn ffmetadata_has_global_tags_and_chapters() {
+        let marks = vec![
+            ("Introduction".to_string(), 0u64, 5000u64),
+            ("Chapter 1".to_string(), 5000u64, 12000u64),
+        ];
+        let out = build_ffmetadata(Some("My Book"), Some("Jane Doe"), Some("2020"), Some("123"), &marks);
+        assert!(out.starts_with(";FFMETADATA1"));
+        assert!(out.contains("title=My Book"));
+        assert!(out.contains("artist=Jane Doe"));
+        assert!(out.contains("genre=Audiobook"));
+        assert_eq!(out.matches("[CHAPTER]").count(), 2);
+        assert!(out.contains("START=5000"));
+        assert!(out.contains("END=12000"));
+        assert!(out.contains("title=Chapter 1"));
+    }
+
+    #[test]
+    fn ffmetadata_escapes_special_chars() {
+        let marks = vec![("A=B; C#D".to_string(), 0u64, 1u64)];
+        let out = build_ffmetadata(Some("x"), None, None, None, &marks);
+        assert!(out.contains(r"title=A\=B\; C\#D"), "got: {out}");
+    }
 
     #[test]
     fn expands_eg() {

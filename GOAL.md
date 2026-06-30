@@ -69,8 +69,8 @@ normalizes into it; both outputs flow out of it.
 | Phase | Goal | Status |
 |------|------|--------|
 | 0 | Foundation: EPUB read → chapters → plain text → per-chapter WAV | ✅ done |
-| 1 | Chapter-role classification (skip back-matter for audio) | ⬜ next |
-| 2 | M4B audiobook assembly (chapters + cover, via ffmpeg) | ⬜ todo |
+| 1 | Chapter-role classification (skip back-matter for audio) | ✅ done |
+| 2 | M4B audiobook assembly (chapters + cover, via ffmpeg) | ⬜ next |
 | 3 | SSML readability layer + voice library | ⬜ todo |
 | 4 | Pristine EPUB 3 output (landmarks, per-chapter spine, valid) | ⬜ todo |
 | 5 | Multi-format ingestion (mobi/azw, fb2, txt, pdf best-effort) | ⬜ todo |
@@ -132,21 +132,22 @@ a batch/CLI flow.
 - [x] Per-chapter WAV via TTV with embedded RIFF metadata
 - [x] CLI `audio` command + end-to-end verification + regression test
 
-### Phase 1 — Chapter-role classification ⬜ (next; highest leverage)
+### Phase 1 — Chapter-role classification ✅ (done)
 
 **Goal:** Never narrate junk. Tag each chapter `FrontMatter | Body | BackMatter`; audio
 synthesizes Body (+ Introduction/Epilogue) only.
 
-- [ ] Add `role` to the IR (`Chapter` / `ChapterText` in `models.rs`)
-- [ ] Classifier in `reader.rs`/`epub_reader.rs`: use EPUB `spine` order, `guide`/
-      `landmarks`, and title heuristics (Index, Notes, Bibliography, Copyright, Title,
-      Dedication, Contents, Acknowledgments → skip; Chapter NN / Introduction / Epilogue → body)
-- [ ] `synthesize_chapters` skips non-body roles by default; add `--include-all` override
-- [ ] Unit tests on the sample book (expect ~8 body chapters, index/biblio/notes excluded)
-- **Acceptance:** running `audio` on the sample book skips the 185 KB index and other
-  back-matter; only real content is synthesized.
+- [x] Add `role` to the IR — `ChapterRole` enum + field on `Chapter`/`ChapterText` (`models.rs`)
+- [x] Classifier (`pipeline/classify.rs`): title + filename heuristics, body-first precedence,
+      unknown→Body so real content is never dropped. Wired into both `epub_reader.rs` and the
+      TOC/fallback paths in `reader.rs`. (Spine `linear`/landmarks left as a future refinement.)
+- [x] `synthesize_chapters` skips non-body roles by default; `--include-all` CLI override
+- [x] Unit tests: `classify.rs` cases + sample-book test asserting index/biblio/notes =
+      BackMatter, cover = FrontMatter, introduction = Body, ≥8 body chapters
+- [x] **Acceptance met:** `audio` on the sample book reports "10 body to narrate", skips all
+      front/back matter (incl. the 185 KB index); first synthesized file is the Introduction.
 
-### Phase 2 — M4B audiobook assembly ⬜
+### Phase 2 — M4B audiobook assembly ⬜ (next)
 
 **Goal:** One resumable, portable audiobook file with chapter navigation.
 
@@ -216,6 +217,11 @@ synthesizes Body (+ Introduction/Epilogue) only.
 
 Append newest entries at the top. One line per completion or decision.
 
+- **2026-06-30** — Phase 1 complete. Added `ChapterRole` (FrontMatter/Body/BackMatter) to the
+  IR + `pipeline/classify.rs` (title+filename heuristics, body-first, unknown→Body). Wired into
+  both EPUB read paths; `synthesize_chapters` now narrates body only with `--include-all`
+  override. Unit + sample-book tests pass; verified end-to-end: "10 body to narrate", front/back
+  matter (incl. 185 KB index) skipped, synthesis starts at the Introduction.
 - **2026-06-30** — Decision: the EPUB is a **retained, shareable artifact** and the user's
   **read mode** (for others / when they can't listen), co-equal with audio. Back-matter is
   skipped for audio only; the EPUB keeps the full book. Updated mission, decisions, Phase 6.

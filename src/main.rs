@@ -37,11 +37,12 @@ async fn main() -> Result<()> {
         Command::Audio {
             input,
             out_dir,
+            format,
             voice,
             include_all,
             no_enrich,
             isbn,
-        } => run_audio(input, out_dir, voice, include_all, !no_enrich, isbn).await,
+        } => run_audio(input, out_dir, format, voice, include_all, !no_enrich, isbn).await,
         Command::Serve { host, port } => server::serve(&host, port).await,
     }
 }
@@ -110,11 +111,16 @@ async fn run_convert(
 async fn run_audio(
     input: PathBuf,
     out_dir: Option<PathBuf>,
+    format: String,
     voice: Option<String>,
     include_all: bool,
     enrich_meta: bool,
     isbn_override: Option<String>,
 ) -> Result<()> {
+    let format = format.trim().to_lowercase();
+    if !matches!(format.as_str(), "wav" | "mp3" | "m4b") {
+        anyhow::bail!("unknown audio format: {format}; use wav, mp3, or m4b");
+    }
     info!("reading {input:?}");
     let mut read_result = tokio::task::spawn_blocking({
         let input = input.clone();
@@ -155,10 +161,45 @@ async fn run_audio(
         .unwrap_or("ebook");
 
     info!("synthesizing audio via TTV");
-    let paths = tts::synthesize_chapters(&chapters, &out_dir, file_stem, voice.as_deref(), include_all)
+    let audios = tts::synthesize_chapters(&chapters, &out_dir, file_stem, voice.as_deref(), include_all)
         .await
         .context("failed to synthesize chapter audio")?;
 
-    println!("Wrote {} WAV file(s) to {}", paths.len(), out_dir.display());
+    if audios.is_empty() {
+        anyhow::bail!("no chapters were synthesized (all skipped or empty)");
+    }
+
+    match format.as_str() {
+        "wav" => {
+            println!("Wrote {} WAV chapter file(s) to {}", audios.len(), out_dir.display());
+        }
+        "m4b" => {
+            info!("assembling {} chapters into M4B audiobook", audios.len());
+            let meta = read_result.metadata.clone();
+            let stem = file_stem.to_string();
+            let dir = out_dir.clone();
+            let m4b = tokio::task::spawn_blocking(move || {
+                tts::build_m4b(&meta, &audios, &dir, &stem)
+            })
+            .await
+            .context("m4b task panicked")?
+            .context("failed to assemble m4b audiobook")?;
+            println!("Done: {}", m4b.display());
+        }
+        "mp3" => {
+            let dir = out_dir.clone();
+            let book_title = read_result.metadata.title.clone();
+            let author = read_result.metadata.author.clone();
+            let paths = tokio::task::spawn_blocking(move || {
+                tts::transcode_chapters_to_mp3(&audios, &dir, book_title.as_deref(), author.as_deref())
+            })
+            .await
+            .context("mp3 task panicked")?
+            .context("failed to transcode chapters to mp3")?;
+            println!("Wrote {} MP3 chapter file(s) to {}", paths.len(), out_dir.display());
+        }
+        _ => unreachable!(),
+    }
+
     Ok(())
 }
