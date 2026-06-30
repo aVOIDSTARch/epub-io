@@ -52,10 +52,12 @@ pub fn read_epub_chapters(path: &Path) -> Result<Vec<Chapter>> {
             .or_else(|| extract_title(&content))
             .unwrap_or_else(|| format!("Chapter {}", i + 1));
 
+        let role = crate::pipeline::classify::classify_role(&title, &base);
         chapters.push(Chapter {
             title,
             content,
             filename: ensure_xhtml(&base),
+            role,
         });
     }
 

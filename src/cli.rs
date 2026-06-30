@@ -54,6 +54,11 @@ pub enum Command {
         #[arg(long)]
         voice: Option<String>,
 
+        /// Narrate every chapter, including front/back matter (cover, contents,
+        /// index, bibliography, notes). By default only body chapters are read.
+        #[arg(long)]
+        include_all: bool,
+
         /// Skip Open Library metadata enrichment
         #[arg(long)]
         no_enrich: bool,

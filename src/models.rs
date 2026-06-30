@@ -45,11 +45,27 @@ pub struct BookMetadata {
     pub tags: Vec<String>,
 }
 
+/// Where a chapter sits in the book's structure. Drives audio inclusion
+/// (only [`ChapterRole::Body`] is narrated by default) and EPUB landmarks.
+/// The EPUB output keeps every chapter regardless of role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChapterRole {
+    /// Cover, title page, copyright, dedication, contents, acknowledgments, etc.
+    FrontMatter,
+    /// Real content: chapters, introduction, prologue, epilogue, conclusion.
+    #[default]
+    Body,
+    /// Index, bibliography, notes, glossary, appendix, etc.
+    BackMatter,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
     pub title: String,
     pub content: String,
     pub filename: String,
+    pub role: ChapterRole,
 }
 
 /// A single chapter reduced to plain text (no markup) plus the book-level
@@ -61,6 +77,7 @@ pub struct ChapterText {
     pub chapter_number: usize,
     pub title: String,
     pub filename: String,
+    pub role: ChapterRole,
     pub page_range: Option<String>,
     /// The actual readable text of the chapter, with all HTML markup stripped.
     pub text: String,

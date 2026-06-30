@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 
-use crate::models::ChapterText;
+use crate::models::{ChapterRole, ChapterText};
 
 /// Endpoint of the local text-to-voice (TTV) service.
 const TTV_ENDPOINT: &str = "http://127.0.0.1:3310/ttv";
@@ -471,14 +471,19 @@ pub async fn synthesize_chapter_text_to_wav(
     Ok(())
 }
 
-/// Synthesize every chapter to a WAV file in `out_dir`, named
-/// `{file_stem}-ch{NNN}.wav`. Chapters whose text is empty are skipped.
-/// Returns the paths of the WAV files written.
+/// Synthesize chapters to WAV files in `out_dir`, named `{file_stem}-ch{NNN}.wav`.
+///
+/// By default only body chapters are narrated — front matter (cover, copyright,
+/// contents, …) and back matter (index, bibliography, notes, …) are skipped, since
+/// they are miserable to listen to and waste synthesis. Set `include_all` to
+/// narrate every chapter regardless of role. Chapters with empty text are always
+/// skipped. Returns the paths of the WAV files written.
 pub async fn synthesize_chapters(
     chapters: &[ChapterText],
     out_dir: &Path,
     file_stem: &str,
     voice: Option<&str>,
+    include_all: bool,
 ) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("failed to create output directory {:?}", out_dir))?;
@@ -487,6 +492,16 @@ pub async fn synthesize_chapters(
     let mut outputs = Vec::new();
 
     for chapter in chapters {
+        if !include_all && chapter.role != ChapterRole::Body {
+            tracing::info!(
+                "skipping {:?} chapter {}: {}",
+                chapter.role,
+                chapter.chapter_number,
+                chapter.title
+            );
+            continue;
+        }
+
         if chapter.text.trim().is_empty() {
             tracing::debug!("skipping empty chapter {}", chapter.chapter_number);
             continue;

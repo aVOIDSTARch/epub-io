@@ -1,4 +1,5 @@
 // v0.0.1
+pub mod classify;
 pub mod enrich;
 pub mod epub_reader;
 pub mod reader;

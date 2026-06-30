@@ -38,9 +38,10 @@ async fn main() -> Result<()> {
             input,
             out_dir,
             voice,
+            include_all,
             no_enrich,
             isbn,
-        } => run_audio(input, out_dir, voice, !no_enrich, isbn).await,
+        } => run_audio(input, out_dir, voice, include_all, !no_enrich, isbn).await,
         Command::Serve { host, port } => server::serve(&host, port).await,
     }
 }
@@ -110,6 +111,7 @@ async fn run_audio(
     input: PathBuf,
     out_dir: Option<PathBuf>,
     voice: Option<String>,
+    include_all: bool,
     enrich_meta: bool,
     isbn_override: Option<String>,
 ) -> Result<()> {
@@ -133,7 +135,13 @@ async fn run_audio(
 
     // Post-pipeline: extract each chapter into a plain-text object with metadata.
     let chapters = reader::extract_chapter_texts(&read_result);
-    info!("extracted {} chapters", chapters.len());
+    let body = chapters.iter().filter(|c| c.role == models::ChapterRole::Body).count();
+    info!(
+        "extracted {} chapters ({} body to narrate{})",
+        chapters.len(),
+        body,
+        if include_all { ", but --include-all set" } else { "" }
+    );
 
     let out_dir = out_dir.unwrap_or_else(|| {
         input
@@ -146,8 +154,8 @@ async fn run_audio(
         .and_then(|s| s.to_str())
         .unwrap_or("ebook");
 
-    info!("synthesizing audio via TTV ({} chapters)", chapters.len());
-    let paths = tts::synthesize_chapters(&chapters, &out_dir, file_stem, voice.as_deref())
+    info!("synthesizing audio via TTV");
+    let paths = tts::synthesize_chapters(&chapters, &out_dir, file_stem, voice.as_deref(), include_all)
         .await
         .context("failed to synthesize chapter audio")?;
 

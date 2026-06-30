@@ -6,8 +6,8 @@ use ebook::utils::detect_format;
 use std::path::Path;
 use tracing::debug;
 
-use crate::models::{BookMetadata, Chapter, ChapterText};
-use crate::pipeline::tts;
+use crate::models::{BookMetadata, Chapter, ChapterRole, ChapterText};
+use crate::pipeline::{classify, tts};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -56,6 +56,7 @@ pub fn extract_chapter_texts(read_result: &ReadResult) -> Vec<ChapterText> {
             chapter_number: i + 1,
             title: chapter.title.clone(),
             filename: chapter.filename.clone(),
+            role: chapter.role,
             page_range: extract_page_range(&chapter.content),
             text: tts::html_to_plain_text(&chapter.content),
             book_title: meta.title.clone(),
@@ -153,6 +154,7 @@ fn read_with_handler<H: EbookReader>(mut handler: H, path: &Path) -> Result<Read
             title: metadata.title.clone().unwrap_or_else(|| "Content".to_string()),
             content: raw_content,
             filename: "chapter_001.xhtml".to_string(),
+            role: ChapterRole::Body,
         }]
     } else {
         build_chapters_from_toc(toc, &raw_content)
@@ -186,10 +188,12 @@ fn build_chapters_from_toc(toc: Vec<TocEntry>, full_content: &str) -> Vec<Chapte
                 .cloned()
                 .unwrap_or_else(|| if segments.is_empty() { full_content.to_string() } else { String::new() });
 
+            let role = classify::classify_role(&entry.title, &filename);
             Chapter {
                 content,
                 title: entry.title,
                 filename,
+                role,
             }
         })
         .collect()
@@ -264,6 +268,24 @@ mod tests {
             texts.iter().all(|c| !c.text.contains('<')),
             "plain text should not contain markup"
         );
+
+        // Phase 1: back-matter (index/bibliography/notes) must NOT be body, and
+        // real chapters / introduction must be body.
+        let role_of = |needle: &str| {
+            texts
+                .iter()
+                .find(|c| c.title.to_lowercase().contains(needle) || c.filename.to_lowercase().contains(needle))
+                .map(|c| c.role)
+        };
+        assert_eq!(role_of("index"), Some(ChapterRole::BackMatter), "index should be back matter");
+        assert_eq!(role_of("bibliograph"), Some(ChapterRole::BackMatter), "bibliography should be back matter");
+        assert_eq!(role_of("notes"), Some(ChapterRole::BackMatter), "notes should be back matter");
+        assert_eq!(role_of("cover"), Some(ChapterRole::FrontMatter), "cover should be front matter");
+        assert_eq!(role_of("introduction"), Some(ChapterRole::Body), "introduction should be body");
+
+        let body = texts.iter().filter(|c| c.role == ChapterRole::Body).count();
+        assert!(body >= 8, "expected at least 8 body chapters, got {body}");
+        assert!(body < texts.len(), "some chapters should be filtered out of audio");
     }
 }
 
