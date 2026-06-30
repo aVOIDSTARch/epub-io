@@ -41,6 +41,28 @@ pub enum Command {
         isbn: Option<String>,
     },
 
+    /// Synthesize per-chapter WAV audio via the local TTV API (localhost:3310)
+    Audio {
+        /// Input ebook (epub, mobi, pdf, fb2, txt, azw, cbz)
+        input: PathBuf,
+
+        /// Directory to write WAV files into (default: alongside the input)
+        #[arg(short, long)]
+        out_dir: Option<PathBuf>,
+
+        /// TTV voice identifier to use
+        #[arg(long)]
+        voice: Option<String>,
+
+        /// Skip Open Library metadata enrichment
+        #[arg(long)]
+        no_enrich: bool,
+
+        /// Override ISBN used for Open Library lookup
+        #[arg(long)]
+        isbn: Option<String>,
+    },
+
     /// Start the OpenAPI HTTP server
     Serve {
         /// Bind address

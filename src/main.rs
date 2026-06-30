@@ -12,7 +12,7 @@ use tracing::info;
 
 use cli::{Cli, Command};
 use models::{ConvertOptions, EpubVersion};
-use pipeline::{enrich, reader, writer};
+use pipeline::{enrich, reader, tts, writer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -34,6 +34,13 @@ async fn main() -> Result<()> {
             no_tts,
             isbn,
         } => run_convert(input, output, epub_version, !no_enrich, !no_tts, isbn).await,
+        Command::Audio {
+            input,
+            out_dir,
+            voice,
+            no_enrich,
+            isbn,
+        } => run_audio(input, out_dir, voice, !no_enrich, isbn).await,
         Command::Serve { host, port } => server::serve(&host, port).await,
     }
 }
@@ -96,5 +103,54 @@ async fn run_convert(
 
     info!("wrote {} bytes to {output_path:?}", epub_bytes.len());
     println!("Done: {}", output_path.display());
+    Ok(())
+}
+
+async fn run_audio(
+    input: PathBuf,
+    out_dir: Option<PathBuf>,
+    voice: Option<String>,
+    enrich_meta: bool,
+    isbn_override: Option<String>,
+) -> Result<()> {
+    info!("reading {input:?}");
+    let mut read_result = tokio::task::spawn_blocking({
+        let input = input.clone();
+        move || reader::read_ebook(&input)
+    })
+    .await
+    .context("reader task panicked")?
+    .context("failed to read ebook")?;
+
+    if enrich_meta {
+        info!("enriching metadata via Open Library");
+        let ol_client = OpenLibraryClient::builder()
+            .build()
+            .context("open library client init")?;
+        read_result.metadata =
+            enrich::enrich_metadata(&ol_client, read_result.metadata, isbn_override.as_deref()).await;
+    }
+
+    // Post-pipeline: extract each chapter into a plain-text object with metadata.
+    let chapters = reader::extract_chapter_texts(&read_result);
+    info!("extracted {} chapters", chapters.len());
+
+    let out_dir = out_dir.unwrap_or_else(|| {
+        input
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    });
+    let file_stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ebook");
+
+    info!("synthesizing audio via TTV ({} chapters)", chapters.len());
+    let paths = tts::synthesize_chapters(&chapters, &out_dir, file_stem, voice.as_deref())
+        .await
+        .context("failed to synthesize chapter audio")?;
+
+    println!("Wrote {} WAV file(s) to {}", paths.len(), out_dir.display());
     Ok(())
 }

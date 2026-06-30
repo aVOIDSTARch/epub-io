@@ -52,6 +52,27 @@ pub struct Chapter {
     pub filename: String,
 }
 
+/// A single chapter reduced to plain text (no markup) plus the book-level
+/// metadata needed to tag downstream artifacts such as audio files.
+///
+/// This is the post-pipeline representation fed to the TTV synthesis stage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChapterText {
+    pub chapter_number: usize,
+    pub title: String,
+    pub filename: String,
+    pub page_range: Option<String>,
+    /// The actual readable text of the chapter, with all HTML markup stripped.
+    pub text: String,
+    // — Book-level metadata copied in for convenience/tagging —
+    pub book_title: Option<String>,
+    pub author: Option<String>,
+    pub language: Option<String>,
+    pub isbn: Option<String>,
+    pub publisher: Option<String>,
+    pub publication_date: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConvertOptions {
     pub epub_version: EpubVersion,

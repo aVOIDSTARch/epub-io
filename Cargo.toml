@@ -24,3 +24,5 @@ anyhow = "1"
 reqwest = { version = "0.12", features = ["rustls-tls"] }
 base64 = "0.21"
 id3 = "1.17"
+zip = "2.4"
+quick-xml = "0.36"
