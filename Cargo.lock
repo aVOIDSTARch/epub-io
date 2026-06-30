@@ -270,6 +270,12 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -708,7 +714,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0fe31917ff0fb2e6cf92e73ffd3ca8b6847d277be815457dcc0a1dfeac53c53"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "clap",
  "encoding_rs",
  "env_logger",
@@ -788,10 +794,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.21.7",
  "clap",
  "ebook",
  "epub-builder",
  "html-escape",
+ "id3",
  "open-library-api-rs",
  "reqwest",
  "serde",
@@ -1268,7 +1276,7 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -1391,6 +1399,17 @@ dependencies = [
  "zerofrom",
  "zerotrie",
  "zerovec",
+]
+
+[[package]]
+name = "id3"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70d6d9f23a28c6feab60d7b4a339e004809019ec9d5fd964b3f4c655ff9bc141"
+dependencies = [
+ "bitflags 2.13.0",
+ "byteorder",
+ "flate2",
 ]
 
 [[package]]
@@ -2548,7 +2567,7 @@ version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
  "futures-channel",
@@ -2615,7 +2634,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0a621b37a548ff6ab6292d57841eb25785a7f146d89391a19c9f199414bd13da"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "chrono",
  "futures",
  "pastey 0.2.3",

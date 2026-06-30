@@ -54,9 +54,6 @@ pub fn build_epub(
             .metadata("subject", &meta.tags.join(", "))
             .context("set subject")?;
     }
-    if let Some(pub_date) = &meta.publication_date {
-        builder.metadata("date", pub_date).context("set date")?;
-    }
     if let Some(publisher) = &meta.publisher {
         builder.metadata("generator", publisher).context("set generator")?;
     }

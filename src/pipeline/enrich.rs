@@ -1,6 +1,8 @@
+
+
 // v0.0.1
 use open_library_api_rs::models::common::{CoverKey, ImageSize};
-use open_library_api_rs::models::search::SearchParams;
+use open_library_api_rs::models::search::{SearchParams};
 use open_library_api_rs::OpenLibraryClient;
 use tracing::{debug, warn};
 
@@ -12,7 +14,7 @@ pub async fn enrich_metadata(
     isbn_override: Option<&str>,
 ) -> BookMetadata {
     let effective_isbn = isbn_override
-        .map(str::to_owned)
+        .map(ToOwned::to_owned)
         .or_else(|| meta.isbn.clone());
 
     let edition = if let Some(ref isbn) = effective_isbn {
@@ -33,13 +35,13 @@ pub async fn enrich_metadata(
     if let Some(ed) = edition {
         apply_edition(&mut meta, ed, client).await;
     } else {
-        // Fallback: title+author search
+        // Fallback: title+author search and edition fetch by title.
         let title = meta.title.clone();
         let author = meta.author.clone();
 
         if title.is_some() || author.is_some() {
             let params = SearchParams {
-                title,
+                title: title.clone(),
                 author,
                 limit: Some(1),
                 ..Default::default()
@@ -50,6 +52,28 @@ pub async fn enrich_metadata(
                     let doc = &resp.docs[0];
                     debug!("search found: {:?}", doc.title);
 
+                    if let Some(edition_key) = doc.cover_edition_key.clone() {
+                        match client.get_edition(&edition_key).await {
+                            Ok(ed) => {
+                                debug!("edition lookup succeeded for {edition_key}");
+                                apply_edition(&mut meta, ed, client).await;
+                                return meta;
+                            }
+                            Err(e) => warn!("edition lookup failed for {edition_key}: {e}"),
+                        }
+                    }
+
+                    if let Some(isbn) = doc.isbn.as_ref().and_then(|v| v.first()) {
+                        match client.get_edition_by_isbn(isbn).await {
+                            Ok(ed) => {
+                                debug!("search-doc ISBN lookup succeeded for {isbn}");
+                                apply_edition(&mut meta, ed, client).await;
+                                return meta;
+                            }
+                            Err(e) => warn!("search-doc ISBN lookup failed for {isbn}: {e}"),
+                        }
+                    }
+
                     if meta.publisher.is_none() {
                         meta.publisher = doc.publisher.as_ref().and_then(|v| v.first().cloned());
                     }
@@ -57,8 +81,7 @@ pub async fn enrich_metadata(
                         meta.language = doc.language.as_ref().and_then(|v| v.first().cloned());
                     }
                     if meta.publication_date.is_none() {
-                        meta.publication_date =
-                            doc.first_publish_year.map(|y| y.to_string());
+                        meta.publication_date = doc.first_publish_year.map(|y| y.to_string());
                     }
                     if meta.tags.is_empty() {
                         if let Some(subjects) = &doc.subject {

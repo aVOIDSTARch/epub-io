@@ -1,5 +1,16 @@
 // v0.0.1
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose, Engine as _};
+use id3::{frame::Comment, Tag, TagLike, Version};
+use reqwest::Client;
+use serde::Deserialize;
+use serde_json::json;
 use std::borrow::Cow;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tempfile::NamedTempFile;
 
 /// Static table of abbreviation expansions applied in order.
 static ABBREVIATIONS: &[(&str, &str)] = &[
@@ -188,6 +199,41 @@ fn normalize_whitespace(s: &str) -> String {
     result
 }
 
+fn html_to_plain_text(html: &str) -> String {
+    let decoded = html_escape::decode_html_entities(html);
+    let stripped = strip_html_tags(&decoded);
+    normalize_whitespace(&stripped).trim().to_string()
+}
+
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut prev_space = false;
+
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                prev_space = true;
+            }
+            _ if in_tag => continue,
+            c if c.is_whitespace() => {
+                if !prev_space {
+                    result.push(' ');
+                    prev_space = true;
+                }
+            }
+            c => {
+                prev_space = false;
+                result.push(c);
+            }
+        }
+    }
+
+    result
+}
+
 /// Wrap cleaned chapter content in a full EPUB-compatible XHTML shell.
 pub fn wrap_xhtml(title: &str, lang: &str, body_content: &str) -> String {
     format!(
@@ -210,6 +256,146 @@ pub fn wrap_xhtml(title: &str, lang: &str, body_content: &str) -> String {
     )
 }
 
+pub async fn synthesize_chapter_wav(
+    epub_path: &Path,
+    chapter_number: usize,
+    chapter_title: &str,
+    chapter_text: &str,
+    voice_identifier: Option<&str>,
+) -> Result<PathBuf> {
+    let epub_stem = epub_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("ebook");
+
+    let output_file_name = format!("{epub_stem}-ch{:03}.wav", chapter_number);
+    let output_path = epub_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(&output_file_name);
+
+    let plain_text = html_to_plain_text(chapter_text);
+    let request_body = json!({
+        "text": plain_text,
+        "format": "wav",
+        "sample_rate_hz": 24000,
+        "voice_identifier": voice_identifier,
+    });
+
+    let client = Client::new();
+    let response = client
+        .post("http://127.0.0.1:3310/ttv")
+        .json(&request_body)
+        .send()
+        .await
+        .context("failed to send TTV request")?;
+
+    let status = response.status();
+    let body_text = response
+        .text()
+        .await
+        .context("failed to read TTV response body")?;
+    if !status.is_success() {
+        anyhow::bail!("TTV request failed: {} - {}", status, body_text);
+    }
+
+    let response: TtvResponse = serde_json::from_str(&body_text)
+        .context("failed to parse TTV response JSON")?;
+
+    let audio_bytes = general_purpose::STANDARD
+        .decode(response.audio_base64.trim())
+        .context("failed to decode base64 audio")?;
+
+    let mut file = File::create(&output_path)
+        .with_context(|| format!("failed to create output file {:?}", output_path))?;
+    file.write_all(&audio_bytes)
+        .context("failed to write wav output")?;
+    file.flush().context("failed to flush wav output")?;
+
+    Ok(output_path)
+}
+
+pub async fn synthesize_chapter_mp3(
+    epub_path: &Path,
+    chapter_number: usize,
+    chapter_title: &str,
+    chapter_text: &str,
+    voice_identifier: Option<&str>,
+) -> Result<PathBuf> {
+    let wav_path = synthesize_chapter_wav(
+        epub_path,
+        chapter_number,
+        chapter_title,
+        chapter_text,
+        voice_identifier,
+    )
+    .await?;
+
+    let output_file_name = format!(
+        "{}-ch{:03}.mp3",
+        epub_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("ebook"),
+        chapter_number
+    );
+    let output_path = epub_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(&output_file_name);
+
+    let status = Command::new("ffmpeg")
+        .args(&[
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            wav_path.to_str().unwrap(),
+            "-codec:a",
+            "libmp3lame",
+            "-qscale:a",
+            "2",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .context("failed to spawn ffmpeg")?;
+
+    if !status.success() {
+        anyhow::bail!("ffmpeg failed to transcode WAV to MP3");
+    }
+
+    let epub_stem = epub_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("ebook");
+
+    let mut tag = Tag::new();
+    tag.set_title(chapter_title);
+    tag.set_album(epub_stem);
+    tag.set_artist("epub-io");
+    tag.set_track(chapter_number as u32);
+    tag.add_frame(id3::frame::Comment {
+        lang: "eng".to_string(),
+        description: "Generated by".to_string(),
+        text: "epub-io".to_string(),
+    });
+    tag.write_to_path(&output_path, Version::Id3v24)
+        .context("failed to write ID3 metadata")?;
+
+    Ok(output_path)
+}
+
+#[derive(Deserialize)]
+struct TtvResponse {
+    audio_base64: String,
+    format: String,
+    sample_rate_hz: u32,
+    channels: u16,
+    byte_count: usize,
+    frame_count: usize,
+}
+
 fn escape_attr(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('"', "&quot;")
@@ -220,6 +406,8 @@ fn escape_attr(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::EpubVersion;
+    use std::path::Path;
 
     #[test]
     fn expands_eg() {
@@ -250,5 +438,41 @@ mod tests {
         let out = clean_for_tts("<p>hello[1] world[^2]</p>");
         assert!(!out.contains("[1]"), "got: {out}");
         assert!(!out.contains("[^2]"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn synthesize_first_chapter_of_root_book() -> anyhow::Result<()> {
+        let epub_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "TheLostHistoryofLiberalism(Rosenblatt,Helena)(z-library.sk,1lib.sk,z-lib.sk).epub",
+        );
+        assert!(epub_path.exists(), "root EPUB not found: {:?}", epub_path);
+
+        let read_result = crate::pipeline::reader::read_ebook(&epub_path)?;
+        let output_epub = Path::new(env!("CARGO_MANIFEST_DIR")).join("converted_test.epub");
+        let epub_bytes = crate::pipeline::writer::build_epub(
+            &read_result.metadata,
+            &read_result.chapters,
+            &read_result.images,
+            EpubVersion::V3,
+            true,
+        )?;
+        std::fs::write(&output_epub, &epub_bytes)?;
+
+        let first_chapter = read_result
+            .chapters
+            .first()
+            .expect("expected at least one chapter");
+
+        let wav_path = synthesize_chapter_wav(
+            &output_epub,
+            1,
+            &first_chapter.title,
+            &first_chapter.content,
+            None,
+        )
+        .await?;
+
+        assert!(wav_path.exists(), "WAV file was not created");
+        Ok(())
     }
 }

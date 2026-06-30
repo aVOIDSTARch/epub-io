@@ -45,7 +45,7 @@ pub struct BookMetadata {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
     pub title: String,
     pub content: String,

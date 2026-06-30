@@ -7,11 +7,67 @@ use std::path::Path;
 use tracing::debug;
 
 use crate::models::{BookMetadata, Chapter};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub struct ReadResult {
     pub metadata: BookMetadata,
     pub chapters: Vec<Chapter>,
     pub images: Vec<ImageData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChapterExtraction {
+    pub chapter: String,
+    pub chapter_number: usize,
+    pub title: String,
+    pub page_range: Option<String>,
+    pub text: String,
+}
+
+pub fn extract_chapters(read_result: &ReadResult) -> serde_json::Value {
+    let chapters: Vec<ChapterExtraction> = read_result
+        .chapters
+        .iter()
+        .enumerate()
+        .map(|(i, chapter)| ChapterExtraction {
+            chapter: chapter.filename.clone(),
+            chapter_number: i + 1,
+            title: chapter.title.clone(),
+            page_range: extract_page_range(&chapter.content),
+            text: chapter.content.clone(),
+        })
+        .collect();
+
+    json!({ "chapters": chapters })
+}
+
+fn extract_page_range(text: &str) -> Option<String> {
+    let marker = "--- Page ";
+    let mut pages = Vec::new();
+    let mut remainder = text;
+
+    while let Some(idx) = remainder.find(marker) {
+        let start = idx + marker.len();
+        remainder = &remainder[start..];
+        if let Some(end_idx) = remainder.find(" ---") {
+            let raw_num = remainder[..end_idx].trim();
+            if let Ok(page) = raw_num.parse::<u32>() {
+                pages.push(page);
+            }
+            remainder = &remainder[end_idx + 4..];
+        } else {
+            break;
+        }
+    }
+
+    if pages.is_empty() {
+        None
+    } else if pages.len() == 1 {
+        Some(pages[0].to_string())
+    } else {
+        Some(format!("{}-{}", pages.first().unwrap(), pages.last().unwrap()))
+    }
 }
 
 pub fn read_ebook(path: &Path) -> Result<ReadResult> {
@@ -50,6 +106,8 @@ fn read_with_handler<H: EbookReader>(mut handler: H, path: &Path) -> Result<Read
         cover_mime: None,
         tags: meta.tags.unwrap_or_default(),
     };
+
+    println!("ISBN: {:?}", metadata.isbn);
 
     let chapters = if toc.is_empty() {
         // No TOC: treat the whole content as a single chapter
