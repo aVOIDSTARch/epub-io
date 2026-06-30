@@ -6,6 +6,7 @@
 > decision if you have a concrete reason (write that reason in the Progress Log).
 
 **How to use this file**
+
 - Work top-to-bottom through the **Roadmap**. Each phase has a goal, tasks, and acceptance criteria.
 - Mark progress by editing checkboxes: `- [ ]` → `- [x]`. Use `- [~]` for in-progress.
 - Keep the **Status at a glance** table in sync (it's the fast overview).
@@ -29,6 +30,7 @@ page numbers).
 
 A website where the user drops **any** major book file and gets back, served via a fast,
 secure API (to that site and other consumers):
+
 1. A **pristine, consistent EPUB 3** — well-structured, sliceable into chapters. This is a
    **first-class, retained artifact**, not a throwaway intermediate: it is **kept and
    shareable with others**, and is the user's **read mode** for when they can't or don't
@@ -42,20 +44,19 @@ secure API (to that site and other consumers):
 The **keystone is a normalized intermediate model (the Book IR)**. Every input format
 normalizes into it; both outputs flow out of it.
 
-```
-ANY format ──► [Reader adapters] ──► Book IR ──► [EPUB3 writer]  ──► pristine .epub
-                                       │
-                                       └─► [Readability+SSML] ─► [TTV] ─► [ffmpeg] ─► audio (chapters + M4B)
+```text
                                                                                             │
                                                             [API: drop-in → store → stream back] ◄─ website
 ```
 
 **Book IR** (target shape): `Book { metadata, chapters: [{ title, html, plain_text, role }] }`
+
 - `html` — structured markup, consumed by the EPUB writer.
 - `plain_text` — markup stripped, consumed by the audio path.
 - `role` — `FrontMatter | Body | BackMatter` (drives audio inclusion + EPUB landmarks).
 
 **Module map** (`src/`)
+
 - `pipeline/reader.rs` — format dispatch + IR construction (`read_ebook`, `extract_chapter_texts`).
 - `pipeline/epub_reader.rs` — direct EPUB spine reader (real per-chapter content).
 - `pipeline/enrich.rs` — Open Library metadata enrichment.
@@ -123,15 +124,19 @@ a batch/CLI flow.
 ## 7. Roadmap
 
 ### Phase 0 — Foundation ✅ (done)
+
 - [x] Direct EPUB spine reader with real per-chapter content
+
 - [x] Fix chapter-splitting bug (every chapter held whole book)
 - [x] `ChapterText` (plain text + metadata) + `extract_chapter_texts`
 - [x] Per-chapter WAV via TTV with embedded RIFF metadata
 - [x] CLI `audio` command + end-to-end verification + regression test
 
 ### Phase 1 — Chapter-role classification ⬜ (next; highest leverage)
+
 **Goal:** Never narrate junk. Tag each chapter `FrontMatter | Body | BackMatter`; audio
 synthesizes Body (+ Introduction/Epilogue) only.
+
 - [ ] Add `role` to the IR (`Chapter` / `ChapterText` in `models.rs`)
 - [ ] Classifier in `reader.rs`/`epub_reader.rs`: use EPUB `spine` order, `guide`/
       `landmarks`, and title heuristics (Index, Notes, Bibliography, Copyright, Title,
@@ -142,7 +147,9 @@ synthesizes Body (+ Introduction/Epilogue) only.
   back-matter; only real content is synthesized.
 
 ### Phase 2 — M4B audiobook assembly ⬜
+
 **Goal:** One resumable, portable audiobook file with chapter navigation.
+
 - [ ] Batch synth to a chosen codec (reuse/extend `synthesize_chapter_mp3`; prefer AAC)
 - [ ] Generate ffmpeg chapter-metadata file (timestamps from each chapter's duration)
 - [ ] ffmpeg concat → `.m4b` with chapter markers, embedded cover art + title/author tags
@@ -151,7 +158,9 @@ synthesizes Body (+ Introduction/Epilogue) only.
   audiobook player; `ffprobe` shows chapters.
 
 ### Phase 3 — SSML readability + voices ⬜
+
 **Goal:** Narration that's engaging, not robotic.
+
 - [ ] Extend `clean_for_tts` → emit SSML: paragraph/section pauses, sentence pacing,
       emphasis; strip page numbers + footnote refs
 - [ ] Probe TTV API for SSML support; gate SSML behind capability (fallback to plain text)
@@ -160,7 +169,9 @@ synthesizes Body (+ Introduction/Epilogue) only.
 - **Acceptance:** A/B a chapter plain vs SSML; SSML version has natural pauses & pacing.
 
 ### Phase 4 — Pristine EPUB 3 output ⬜
+
 **Goal:** The rebuilt EPUB is genuinely clean and standards-valid.
+
 - [ ] Real per-chapter spine documents (not one blob); stable filenames
 - [ ] `nav.xhtml` with landmarks (cover, toc, bodymatter) driven by `role`
 - [ ] Correct `ReferenceType` per chapter (fix `writer.rs` always-`Text`)
@@ -168,7 +179,9 @@ synthesizes Body (+ Introduction/Epilogue) only.
 - **Acceptance:** output passes EPUBCheck with no errors; opens cleanly with working nav.
 
 ### Phase 5 — Multi-format ingestion ⬜
+
 **Goal:** "ANY major format" in tiers (input quality varies; output EPUB normalizes it).
+
 - [ ] MOBI / AZW3 reader into the IR (Kindle) — real structure
 - [ ] FB2 + TXT readers (easy)
 - [ ] PDF best-effort (text extraction; chapter boundaries are hard — set expectations)
@@ -176,7 +189,9 @@ synthesizes Body (+ Introduction/Epilogue) only.
 - **Acceptance:** each tiered format produces a valid EPUB + audio; PDF documented as best-effort.
 
 ### Phase 6 — Web service ⬜ (partial today)
+
 **Goal:** Drop a file in the browser → get EPUB + audio collection back via API.
+
 - [ ] `POST /api/v1/audiobook`: upload → IR → EPUB + audio collection → job result
 - [ ] Storage layer for artifacts (EPUB, per-chapter audio, M4B) keyed by book — **durable**,
       since the EPUB is a kept/shareable artifact (read mode), not a throwaway
@@ -187,7 +202,9 @@ synthesizes Body (+ Introduction/Epilogue) only.
 - **Acceptance:** drop a book in the browser, watch progress, stream the result back.
 
 ### Phase 7 — Hardening ⬜
+
 **Goal:** Fast, secure, high fidelity.
+
 - [ ] Input validation, size limits, sandboxing of ffmpeg/format parsers
 - [ ] AuthN/Z for the API; safe artifact access
 - [ ] Concurrency/throughput for synthesis; caching; resumable jobs
