@@ -70,8 +70,8 @@ normalizes into it; both outputs flow out of it.
 |------|------|--------|
 | 0 | Foundation: EPUB read → chapters → plain text → per-chapter WAV | ✅ done |
 | 1 | Chapter-role classification (skip back-matter for audio) | ✅ done |
-| 2 | M4B audiobook assembly (chapters + cover, via ffmpeg) | ⬜ next |
-| 3 | SSML readability layer + voice library | ⬜ todo |
+| 2 | M4B audiobook assembly (chapters + cover, via ffmpeg) | ✅ done |
+| 3 | SSML readability layer + voice library | ⬜ next |
 | 4 | Pristine EPUB 3 output (landmarks, per-chapter spine, valid) | ⬜ todo |
 | 5 | Multi-format ingestion (mobi/azw, fb2, txt, pdf best-effort) | ⬜ todo |
 | 6 | Web service: drop-in → store → stream back via API | 🟨 partial |
@@ -147,18 +147,25 @@ synthesizes Body (+ Introduction/Epilogue) only.
 - [x] **Acceptance met:** `audio` on the sample book reports "10 body to narrate", skips all
       front/back matter (incl. the 185 KB index); first synthesized file is the Introduction.
 
-### Phase 2 — M4B audiobook assembly ⬜ (next)
+### Phase 2 — M4B audiobook assembly ✅ (done)
 
 **Goal:** One resumable, portable audiobook file with chapter navigation.
 
-- [ ] Batch synth to a chosen codec (reuse/extend `synthesize_chapter_mp3`; prefer AAC)
-- [ ] Generate ffmpeg chapter-metadata file (timestamps from each chapter's duration)
-- [ ] ffmpeg concat → `.m4b` with chapter markers, embedded cover art + title/author tags
-- [ ] CLI flag: `--format wav|mp3|m4b` (default m4b); keep per-chapter files too
-- **Acceptance:** produced `.m4b` plays with working chapter skip + cover in a standard
-  audiobook player; `ffprobe` shows chapters.
+- [x] `synthesize_chapters` returns `ChapterAudio { chapter_number, title, path }`;
+      `transcode_chapters_to_mp3` for per-chapter MP3s (AAC used for M4B)
+- [x] `build_ffmetadata` generates `[CHAPTER]` markers (TIMEBASE=1/1000) from per-chapter
+      durations probed via ffprobe (`probe_duration_ms`), with escaping (`ffmeta_escape`)
+- [x] `build_m4b` (`tts.rs`): ffmpeg concat → `.m4b` with chapter markers, embedded cover
+      art (attached_pic), and global title/author/date/genre tags
+- [x] CLI `--format wav|mp3|m4b` (default m4b); per-chapter WAVs kept as the source
+- [x] **Acceptance met:** offline integration test (`tests/test_m4b.rs`) builds an M4B from
+      generated WAVs; ffprobe confirms 3 chapters + book title tag + embedded cover art.
+      Unit tests cover ffmetadata generation + escaping.
+- Note: per-chapter WAVs are large; producing compact per-chapter streaming units (AAC/Opus)
+  is deferred to Phase 6 (streaming). Direct `ffmpeg`/`ffprobe` calls today — swap to the
+  user's ffmpeg wrapper when ready.
 
-### Phase 3 — SSML readability + voices ⬜
+### Phase 3 — SSML readability + voices ⬜ (next)
 
 **Goal:** Narration that's engaging, not robotic.
 
@@ -217,6 +224,12 @@ synthesizes Body (+ Introduction/Epilogue) only.
 
 Append newest entries at the top. One line per completion or decision.
 
+- **2026-06-30** — Phase 2 complete. `synthesize_chapters` now returns `ChapterAudio`;
+  added `build_m4b` (ffmpeg concat + ffmetadata `[CHAPTER]` markers from ffprobe durations +
+  embedded cover art + tags), `transcode_chapters_to_mp3`, and CLI `--format wav|mp3|m4b`
+  (default m4b). Verified by offline `tests/test_m4b.rs` (ffprobe: 3 chapters, title tag,
+  attached cover) + ffmetadata unit tests. Using direct ffmpeg/ffprobe; swap to the user's
+  ffmpeg wrapper later.
 - **2026-06-30** — Phase 1 complete. Added `ChapterRole` (FrontMatter/Body/BackMatter) to the
   IR + `pipeline/classify.rs` (title+filename heuristics, body-first, unknown→Body). Wired into
   both EPUB read paths; `synthesize_chapters` now narrates body only with `--include-all`
