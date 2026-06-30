@@ -1,0 +1,10 @@
+[package]
+name = "epub-io"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+epub-builder = "0.8.3"
+ebook = "0.1.2"
+lib-epub = "0.3.1"
+epub-parser = "0.3.4"
