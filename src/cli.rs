@@ -50,9 +50,11 @@ pub enum Command {
         #[arg(short, long)]
         out_dir: Option<PathBuf>,
 
-        /// Output audio format: wav (per-chapter only), mp3 (per-chapter),
-        /// or m4b (single chaptered audiobook). Default: m4b.
-        #[arg(long, default_value = "m4b")]
+        /// Output audio format: all (3 chaptered M4B tiers at 32/64/128 kbps
+        /// plus a high-quality per-chapter MP3 fallback), m4b (single 64 kbps
+        /// chaptered audiobook), mp3 (per-chapter), or wav (per-chapter).
+        /// Default: all.
+        #[arg(long, default_value = "all")]
         format: String,
 
         /// TTV voice identifier to use

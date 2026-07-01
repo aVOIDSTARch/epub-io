@@ -118,8 +118,8 @@ async fn run_audio(
     isbn_override: Option<String>,
 ) -> Result<()> {
     let format = format.trim().to_lowercase();
-    if !matches!(format.as_str(), "wav" | "mp3" | "m4b") {
-        anyhow::bail!("unknown audio format: {format}; use wav, mp3, or m4b");
+    if !matches!(format.as_str(), "all" | "wav" | "mp3" | "m4b") {
+        anyhow::bail!("unknown audio format: {format}; use all, wav, mp3, or m4b");
     }
     info!("reading {input:?}");
     let mut read_result = tokio::task::spawn_blocking({
@@ -170,6 +170,41 @@ async fn run_audio(
     }
 
     match format.as_str() {
+        "all" => {
+            info!(
+                "assembling {} chapters into M4B tiers (32/64/128k) + MP3 fallback",
+                audios.len()
+            );
+            let meta = read_result.metadata.clone();
+            let stem = file_stem.to_string();
+            let dir = out_dir.clone();
+            let book_title = read_result.metadata.title.clone();
+            let author = read_result.metadata.author.clone();
+            let (m4bs, mp3s) = tokio::task::spawn_blocking(
+                move || -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+                    let m4bs =
+                        tts::build_m4b_tiers(&meta, &audios, &dir, &stem, &["32k", "64k", "128k"])?;
+                    let mp3s = tts::transcode_chapters_to_mp3(
+                        &audios,
+                        &dir,
+                        book_title.as_deref(),
+                        author.as_deref(),
+                    )?;
+                    Ok((m4bs, mp3s))
+                },
+            )
+            .await
+            .context("audio assembly task panicked")?
+            .context("failed to assemble audiobook tiers")?;
+            for p in &m4bs {
+                println!("Done: {}", p.display());
+            }
+            println!(
+                "Wrote {} MP3 chapter file(s) to {}",
+                mp3s.len(),
+                out_dir.display()
+            );
+        }
         "wav" => {
             println!("Wrote {} WAV chapter file(s) to {}", audios.len(), out_dir.display());
         }

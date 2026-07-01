@@ -548,6 +548,57 @@ pub fn build_m4b(
     out_dir: &Path,
     file_stem: &str,
 ) -> Result<PathBuf> {
+    let (concat_path, meta_path, cover_file) =
+        prepare_m4b_sidecars(meta, chapters, out_dir, file_stem)?;
+    let output_path = out_dir.join(format!("{file_stem}.m4b"));
+    run_m4b_ffmpeg(&concat_path, &meta_path, cover_file.as_ref(), &output_path, "64k")?;
+
+    // Clean up the intermediate sidecar files.
+    let _ = std::fs::remove_file(&concat_path);
+    let _ = std::fs::remove_file(&meta_path);
+
+    Ok(output_path)
+}
+
+/// Assemble the same chapters into several `.m4b` files at increasing AAC
+/// bitrates (e.g. `["32k", "64k", "128k"]`) — a quality/size ladder where every
+/// tier keeps its chapter markers and cover art. The durations are probed and
+/// the concat/ffmetadata sidecars are built once, then reused for each bitrate.
+/// Outputs are named `{file_stem}-{bitrate}.m4b`; returns the paths in order.
+pub fn build_m4b_tiers(
+    meta: &BookMetadata,
+    chapters: &[ChapterAudio],
+    out_dir: &Path,
+    file_stem: &str,
+    bitrates: &[&str],
+) -> Result<Vec<PathBuf>> {
+    let (concat_path, meta_path, cover_file) =
+        prepare_m4b_sidecars(meta, chapters, out_dir, file_stem)?;
+
+    let mut outputs = Vec::with_capacity(bitrates.len());
+    for bitrate in bitrates {
+        let output_path = out_dir.join(format!("{file_stem}-{bitrate}.m4b"));
+        run_m4b_ffmpeg(&concat_path, &meta_path, cover_file.as_ref(), &output_path, bitrate)?;
+        outputs.push(output_path);
+    }
+
+    // Clean up the intermediate sidecar files.
+    let _ = std::fs::remove_file(&concat_path);
+    let _ = std::fs::remove_file(&meta_path);
+
+    Ok(outputs)
+}
+
+/// Probe chapter durations and stage the shared inputs for an `.m4b` mux: the
+/// concat-list and ffmetadata (with `[CHAPTER]` markers) sidecar files, plus the
+/// optional cover image in a temp file. Used by [`build_m4b`] and
+/// [`build_m4b_tiers`] so the probe/write work is done once per book.
+fn prepare_m4b_sidecars(
+    meta: &BookMetadata,
+    chapters: &[ChapterAudio],
+    out_dir: &Path,
+    file_stem: &str,
+) -> Result<(PathBuf, PathBuf, Option<NamedTempFile>)> {
     if chapters.is_empty() {
         anyhow::bail!("no chapters to assemble into an audiobook");
     }
@@ -599,18 +650,30 @@ pub fn build_m4b(
         _ => None,
     };
 
-    let output_path = out_dir.join(format!("{file_stem}.m4b"));
+    Ok((concat_path, meta_path, cover_file))
+}
 
+/// Run ffmpeg once to mux the concatenated chapter audio + chapter markers (and
+/// optional cover) into a single `.m4b`, encoding audio as AAC at `bitrate`
+/// (e.g. `"64k"`). The concat/ffmetadata sidecars come from
+/// [`prepare_m4b_sidecars`].
+fn run_m4b_ffmpeg(
+    concat_path: &Path,
+    meta_path: &Path,
+    cover_file: Option<&NamedTempFile>,
+    output_path: &Path,
+    bitrate: &str,
+) -> Result<()> {
     // Build the ffmpeg invocation. Inputs: 0=concat audio, 1=ffmetadata,
     // and optionally 2=cover.
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-y", "-hide_banner", "-loglevel", "error"])
         .args(["-f", "concat", "-safe", "0", "-i"])
-        .arg(&concat_path)
+        .arg(concat_path)
         .args(["-f", "ffmetadata", "-i"])
-        .arg(&meta_path);
+        .arg(meta_path);
 
-    if let Some(cover) = &cover_file {
+    if let Some(cover) = cover_file {
         cmd.arg("-i").arg(cover.path());
     }
 
@@ -619,18 +682,13 @@ pub fn build_m4b(
     if cover_file.is_some() {
         cmd.args(["-map", "2:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic"]);
     }
-    cmd.args(["-c:a", "aac", "-b:a", "64k"]).arg(&output_path);
+    cmd.args(["-c:a", "aac", "-b:a", bitrate]).arg(output_path);
 
     let status = cmd.status().context("failed to spawn ffmpeg for m4b assembly")?;
     if !status.success() {
         anyhow::bail!("ffmpeg failed to assemble m4b");
     }
-
-    // Clean up the intermediate sidecar files.
-    let _ = std::fs::remove_file(&concat_path);
-    let _ = std::fs::remove_file(&meta_path);
-
-    Ok(output_path)
+    Ok(())
 }
 
 /// Transcode each per-chapter WAV to MP3 (alongside it) and tag it with ID3
