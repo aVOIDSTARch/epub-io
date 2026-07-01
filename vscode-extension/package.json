@@ -1,0 +1,157 @@
+{
+  "name": "epub-studio",
+  "displayName": "EPUB Studio",
+  "description": "View, edit, parse, repair and correct EPUB metadata — powered by the epub-io engine.",
+  "version": "0.1.0",
+  "publisher": "avoidstarch",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aVOIDSTARch/epub-io.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Formatters",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:xml",
+    "workspaceContains:**/*.epub"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "epubStudio.epubEditor",
+        "displayName": "EPUB Studio",
+        "selector": [
+          {
+            "filenamePattern": "*.epub"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "epubStudio",
+          "title": "EPUB Studio",
+          "icon": "media/book.svg"
+        }
+      ]
+    },
+    "views": {
+      "epubStudio": [
+        {
+          "id": "epubStudio.structure",
+          "name": "EPUB Structure"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "epubStudio.open",
+        "title": "EPUB: Open in EPUB Studio",
+        "icon": "$(book)"
+      },
+      {
+        "command": "epubStudio.editMetadata",
+        "title": "EPUB: Edit Metadata",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "epubStudio.enrichMetadata",
+        "title": "EPUB: Enrich Metadata (Open Library)",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "epubStudio.repair",
+        "title": "EPUB: Repair & Clean (epub-io)",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "epubStudio.validate",
+        "title": "EPUB: Validate (EPUBCheck)",
+        "icon": "$(check)"
+      },
+      {
+        "command": "epubStudio.editChapter",
+        "title": "EPUB: Edit Chapter Source"
+      },
+      {
+        "command": "epubStudio.extractText",
+        "title": "EPUB: Extract Chapter Plain Text"
+      },
+      {
+        "command": "epubStudio.refresh",
+        "title": "EPUB: Refresh Structure",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "when": "resourceExtname == .epub",
+          "command": "epubStudio.repair",
+          "group": "epubStudio@2"
+        },
+        {
+          "when": "resourceExtname == .epub",
+          "command": "epubStudio.validate",
+          "group": "epubStudio@3"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "epubStudio.refresh",
+          "when": "view == epubStudio.structure",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "epubStudio.editChapter",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "EPUB Studio",
+      "properties": {
+        "epubStudio.epubIoPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the epub-io binary. If empty, EPUB Studio looks for target/debug/epub-io and target/release/epub-io in the workspace, then falls back to 'epub-io' on PATH."
+        },
+        "epubStudio.epubcheckJar": {
+          "type": "string",
+          "default": "",
+          "description": "Path to epubcheck.jar for validation. If empty, validation is unavailable and EPUB Studio explains how to install it."
+        },
+        "epubStudio.javaPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the java executable used to run EPUBCheck. If empty, EPUB Studio resolves it from JAVA_HOME / java_home / PATH. Do NOT point this at a .jdk bundle directory — it must be the java binary (…/Contents/Home/bin/java)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.5.0",
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
