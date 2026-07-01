@@ -5,7 +5,7 @@
 > session — trust the "Locked decisions" section and the checkboxes, and only revisit a
 > decision if you have a concrete reason (write that reason in the Progress Log).
 
-**How to use this file**
+## How to use this file
 
 - Work top-to-bottom through the **Roadmap**. Each phase has a goal, tasks, and acceptance criteria.
 - Mark progress by editing checkboxes: `- [ ]` → `- [x]`. Use `- [~]` for in-progress.
@@ -67,7 +67,7 @@ normalizes into it; both outputs flow out of it.
 ## 4. Status at a glance
 
 | Phase | Goal | Status |
-|------|------|--------|
+| ------ | ------ | -------- |
 | 0 | Foundation: EPUB read → chapters → plain text → per-chapter WAV | ✅ done |
 | 1 | Chapter-role classification (skip back-matter for audio) | ✅ done |
 | 2 | M4B audiobook assembly (chapters + cover, via ffmpeg) | ✅ done |
